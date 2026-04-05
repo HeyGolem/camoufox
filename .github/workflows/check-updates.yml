@@ -1,0 +1,57 @@
+name: Check for Camoufox Updates
+
+# Checks for new Camoufox releases and triggers a build if found.
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 2am UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check for new release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest Camoufox release
+        id: upstream
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/daijro/camoufox/releases/latest | jq -r '.tag_name')
+          TAG="${LATEST#v}"
+          echo "latest=${LATEST}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Latest upstream: ${LATEST}"
+
+      - name: Check if we already have this version
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          # Check if image exists in GHCR
+          EXISTS=$(docker manifest inspect ghcr.io/heygolem/camoufox:${TAG} > /dev/null 2>&1 && echo "true" || echo "false")
+          echo "exists=${EXISTS}" >> $GITHUB_OUTPUT
+          echo "Image ghcr.io/heygolem/camoufox:${TAG} exists: ${EXISTS}"
+
+      - name: Trigger build for new version
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "New version detected: ${{ steps.upstream.outputs.latest }}"
+          echo "Triggering build..."
+          gh workflow run build.yml \
+            -f camoufox_ref=${{ steps.upstream.outputs.latest }}
